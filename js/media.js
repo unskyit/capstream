@@ -1,20 +1,17 @@
 /**
- * CapStream — Universal Video & Audio Media Loader (Zero Duration Limit)
+ * CapStream — Universal Video & Audio Media Loader (Local Vendor + CDN Fallback)
  * Powered by Unskyit
- *
- * Supports ALL browser-decodable video AND audio files:
- * Video: MP4, MOV, WebM, MKV, M4V, OGV
- * Audio: MP3, WAV, M4A, AAC, OGG, FLAC, OPUS, WEBA
  */
 
 export const SPEECH_RATE = 16000;
 export const PEAK_RATE = 50;
 
-const MEDIABUNNY_URL = "https://cdn.jsdelivr.net/npm/mediabunny@1.66.0/+esm";
+const LOCAL_MB_URL = "../vendor/mediabunny.mjs";
+const CDN_MB_URL = "https://cdn.jsdelivr.net/npm/mediabunny@1.66.0/+esm";
 let mbPromise = null;
 
 export function getMediabunny() {
-  return (mbPromise ??= import(MEDIABUNNY_URL));
+  return (mbPromise ??= import(LOCAL_MB_URL).catch(() => import(CDN_MB_URL)));
 }
 
 function isAudioMimeOrExt(file) {
@@ -22,7 +19,6 @@ function isAudioMimeOrExt(file) {
   return /\.(mp3|wav|m4a|aac|ogg|flac|opus|weba|wma)$/i.test(file.name || "");
 }
 
-/** Fallback metadata probe using native HTMLVideoElement / HTMLAudioElement */
 function nativeProbe(file) {
   return new Promise((resolve, reject) => {
     const isAudio = isAudioMimeOrExt(file);
@@ -59,10 +55,6 @@ function nativeProbe(file) {
   });
 }
 
-/**
- * Probes any video OR audio file without throwing on audio-only inputs.
- * No artificial 10-minute duration cap!
- */
 export async function probeMedia(file) {
   try {
     const { ALL_FORMATS, BlobSource, Input } = await getMediabunny();
@@ -105,9 +97,7 @@ export async function probeMedia(file) {
     } finally {
       input.dispose();
     }
-  } catch {
-    // Fall back to native browser decoder (covers WAV/OGG/FLAC/etc.)
-  }
+  } catch {}
   return nativeProbe(file);
 }
 
@@ -139,7 +129,6 @@ function buildPeaks(samples) {
   return peaks;
 }
 
-/** Fallback audio decoder using Web Audio API for WAV/MP3/FLAC/OGG files */
 async function extractAudioNative(file, onProgress) {
   onProgress?.(0.15);
   const arrayBuf = await file.arrayBuffer();
@@ -167,9 +156,6 @@ async function extractAudioNative(file, onProgress) {
   }
 }
 
-/**
- * Extracts 16 kHz mono audio in streaming 20-second blocks so RAM stays flat even on long videos.
- */
 export async function extractAudio(file, onProgress, signal) {
   try {
     const { ALL_FORMATS, AudioBufferSink, BlobSource, Input } = await getMediabunny();

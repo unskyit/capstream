@@ -1,24 +1,25 @@
 /**
- * CapStream — Disk-Streamed & Transparent Background Export Engine
+ * CapStream — Disk-Streamed & Original-Quality Export Engine
  * Powered by Unskyit
- *
- * Modes:
- *  - "mp4-h264"     : Universal H.264 + AAC MP4 (Disk-Streamed via File System Access API)
- *  - "mp4-hevc"     : High-Efficiency H.265 / HEVC + AAC MP4 (Auto-checks hardware support)
- *  - "webm-alpha"   : Transparent Background WebM (VP9 with Alpha Channel + Opus)
- *  - "png-sequence" : Lossless Transparent RGBA PNG Sequence (Direct-to-Folder Disk Stream)
- *  - "chroma-green" : Chroma Key Green (#00FF00) MP4 Overlay (100% NLE & Mobile Compatible)
- *  - "chroma-blue"  : Chroma Key Blue (#0000FF) MP4 Overlay
  */
 import { ensureFont, glyphsOf } from "./fonts.js";
 import { getMediabunny } from "./media.js";
 import { cutsFor, frameSize, renderScene } from "./renderer.js";
 import { cutTotal, downloadBlob, keptRanges, toSourceTime } from "./timeline.js";
 
-const AAC_ENCODER_URL = "https://cdn.jsdelivr.net/npm/@mediabunny/aac-encoder@1.66.0/+esm";
+const LOCAL_AAC_URL = "../vendor/aac-encoder.mjs";
+const CDN_AAC_URL = "https://cdn.jsdelivr.net/npm/@mediabunny/aac-encoder@1.66.0/+esm";
 const FADE = 0.006;
 
 const cancelled = () => new DOMException("Export cancelled", "AbortError");
+
+async function loadAacEncoder() {
+  try {
+    return await import(LOCAL_AAC_URL);
+  } catch {
+    return await import(CDN_AAC_URL);
+  }
+}
 
 export function supportsDiskStream() {
   return typeof window !== "undefined" && typeof window.showSaveFilePicker === "function";
@@ -32,7 +33,6 @@ export function supportsWebCodecs() {
   return typeof VideoEncoder !== "undefined" && typeof VideoFrame !== "undefined";
 }
 
-/** Check hardware/browser codec capabilities for transparent & HEVC exports */
 export async function detectCapabilities() {
   const caps = {
     webCodecs: supportsWebCodecs(),
@@ -125,18 +125,16 @@ async function writeAudioTrack(track, source, kept, signal, AudioBufferSink) {
   source.close();
 }
 
-/**
- * Lossless Transparent PNG Sequence direct-to-folder exporter (zero RAM accumulation)
- */
 async function exportPngSequence({ doc, meta, peaks, shortSide, fps, onProgress, signal }) {
   if (!supportsFolderStream()) {
     throw new Error("Direct-to-folder PNG Sequence export requires Chrome or Edge on desktop.");
   }
   const dirHandle = await window.showDirectoryPicker({ mode: "readwrite" });
+  const targetFps = fps > 0 ? fps : Math.round(meta.fps || 30);
   const { width: W, height: H } = frameSize(meta, doc.frame.aspect, shortSide);
   const cuts = cutsFor(doc, meta.duration);
-  const outDuration = Math.max(1 / fps, meta.duration - cutTotal(cuts, meta.duration));
-  const totalFrames = Math.max(1, Math.round(outDuration * fps));
+  const outDuration = Math.max(1 / targetFps, meta.duration - cutTotal(cuts, meta.duration));
+  const totalFrames = Math.max(1, Math.round(outDuration * targetFps));
 
   await ensureFont(doc.style.font, doc.style.weight, doc.style.italic, glyphsOf(doc.pages));
 
@@ -148,12 +146,9 @@ async function exportPngSequence({ doc, meta, peaks, shortSide, fps, onProgress,
   const startMs = performance.now();
   for (let i = 0; i < totalFrames; i++) {
     if (signal?.aborted) throw cancelled();
-    const tOut = i / fps;
+    const tOut = i / targetFps;
     const tSrc = toSourceTime(cuts, tOut);
-    renderScene(ctx, null, W, H, tSrc, tOut, outDuration, doc, {
-      forceBgMode: "transparent",
-      peaks,
-    });
+    renderScene(ctx, null, W, H, tSrc, tOut, outDuration, doc, { forceBgMode: "transparent", peaks });
     const blob = await new Promise((res) => canvas.toBlob(res, "image/png"));
     const fname = `frame_${String(i + 1).padStart(6, "0")}.png`;
     const fh = await dirHandle.getFileHandle(fname, { create: true });
@@ -165,16 +160,15 @@ async function exportPngSequence({ doc, meta, peaks, shortSide, fps, onProgress,
       const elapsedSec = (performance.now() - startMs) / 1000;
       const ratio = (i + 1) / totalFrames;
       const curFps = (i + 1) / Math.max(0.01, elapsedSec);
-      const etaSec = (totalFrames - (i + 1)) / Math.max(0.01, curFps);
       onProgress?.({
         ratio,
         percent: ratio * 100,
         frame: i + 1,
         totalFrames,
         fps: curFps,
-        speedX: curFps / fps,
+        speedX: curFps / targetFps,
         elapsedSec,
-        etaSec,
+        etaSec: (totalFrames - (i + 1)) / Math.max(0.01, curFps),
         diskStreamed: true,
         codecUsed: "PNG RGBA (Lossless Alpha)",
       });
@@ -191,9 +185,6 @@ async function exportPngSequence({ doc, meta, peaks, shortSide, fps, onProgress,
   };
 }
 
-/**
- * Main Export Function — supports Disk Streaming (StreamTarget) & Transparent Alpha!
- */
 export async function exportProject(options) {
   const {
     file,
@@ -201,17 +192,15 @@ export async function exportProject(options) {
     peaks,
     doc,
     mode = "mp4-h264",
-    shortSide = 1080,
-    fps = 30,
+    shortSide = 0, // 0 = Original Native Resolution!
+    fps = 0,       // 0 = Original Native FPS!
     includeAudio = true,
     useDiskStream = true,
     onProgress,
     signal,
   } = options;
 
-  if (mode === "png-sequence") {
-    return exportPngSequence(options);
-  }
+  if (mode === "png-sequence") return exportPngSequence(options);
 
   if (!supportsWebCodecs()) {
     throw new Error("Your browser does not support WebCodecs video encoding. Please use Chrome, Edge, or Safari 16.4+.");
@@ -242,16 +231,15 @@ export async function exportProject(options) {
   const isHevc = mode === "mp4-hevc";
   const isOverlayOnly = isAlphaWebm || isChromaGreen || isChromaBlue;
 
+  const targetFps = fps > 0 ? fps : Math.max(24, Math.min(60, Math.round(meta.fps || 30)));
   const { width: W, height: H } = frameSize(meta, doc.frame.aspect, shortSide);
   const cuts = cutsFor(doc, meta.duration);
-  const outDuration = Math.max(1 / fps, meta.duration - cutTotal(cuts, meta.duration));
-  const totalFrames = Math.max(1, Math.round(outDuration * fps));
+  const outDuration = Math.max(1 / targetFps, meta.duration - cutTotal(cuts, meta.duration));
+  const totalFrames = Math.max(1, Math.round(outDuration * targetFps));
   const filename = makeExportFilename(meta.name, mode);
 
-  // Pre-load caption font before rendering frame 0
   await ensureFont(doc.style.font, doc.style.weight, doc.style.italic, glyphsOf(doc.pages));
 
-  // Optional Disk Streaming via File System Access API (must be triggered right after user click!)
   let writableStream = null;
   let diskStreamed = false;
   let target;
@@ -268,7 +256,6 @@ export async function exportProject(options) {
       diskStreamed = true;
     } catch (err) {
       if (err?.name === "AbortError") throw cancelled();
-      // Fall back to in-memory buffer if picker fails
       target = new BufferTarget();
       diskStreamed = false;
     }
@@ -301,7 +288,8 @@ export async function exportProject(options) {
     const ctx = canvas.getContext("2d", { alpha: isAlphaWebm });
     if (!ctx) throw new Error("Could not initialize 2D drawing surface.");
 
-    const quality = new Quality({ bitrate: Math.round(W * H * (isAlphaWebm ? 0.14 : 0.1) * 30 * (fps / 30) ** 0.6) });
+    // High-quality bitrate scaled for native resolution (preserves sharp 1080p/1440p/4K detail)
+    const quality = new Quality({ bitrate: Math.round(W * H * (isAlphaWebm ? 0.16 : 0.13) * 30 * (targetFps / 30) ** 0.65) });
 
     let codecList = ["avc"];
     if (isAlphaWebm) codecList = ["vp9"];
@@ -311,7 +299,7 @@ export async function exportProject(options) {
       width: W,
       height: H,
       quality,
-      frameRate: fps,
+      frameRate: targetFps,
       ...(isAlphaWebm ? { alpha: "keep" } : {}),
     });
 
@@ -329,23 +317,21 @@ export async function exportProject(options) {
       keyFrameInterval: 2,
       ...(isAlphaWebm ? { alpha: "keep" } : {}),
     });
-    output.addVideoTrack(videoSource, { frameRate: fps });
+    output.addVideoTrack(videoSource, { frameRate: targetFps });
 
     let audioSource = null;
     if (audioTrack && (await audioTrack.canDecode().catch(() => false))) {
       const targetAudioCodec = isAlphaWebm ? "opus" : "aac";
       if (targetAudioCodec === "aac" && !(await canEncodeAudio("aac"))) {
         try {
-          const { registerAacEncoder } = await import(AAC_ENCODER_URL);
+          const { registerAacEncoder } = await loadAacEncoder();
           registerAacEncoder();
-        } catch {
-          // Proceed without AAC polyfill if unavailable
-        }
+        } catch {}
       }
       if (await canEncodeAudio(targetAudioCodec).catch(() => false)) {
         audioSource = new AudioBufferSource({
           codec: targetAudioCodec,
-          quality: new Quality({ bitrate: 160_000 }),
+          quality: new Quality({ bitrate: 192_000 }),
           transform: { sampleRate: 48_000, numberOfChannels: 2 },
         });
         output.addAudioTrack(audioSource);
@@ -359,7 +345,7 @@ export async function exportProject(options) {
     const writeVideoFrames = async () => {
       if (videoTrack && !isOverlayOnly) {
         const first = await videoTrack.getFirstTimestamp();
-        const sourceTime = (i) => Math.max(first, toSourceTime(cuts, i / fps));
+        const sourceTime = (i) => Math.max(first, toSourceTime(cuts, i / targetFps));
         function* stamps() {
           for (let i = 0; i < totalFrames; i++) yield sourceTime(i);
         }
@@ -369,7 +355,7 @@ export async function exportProject(options) {
             sample?.close();
             throw cancelled();
           }
-          const tOut = i / fps;
+          const tOut = i / targetFps;
           renderScene(
             ctx,
             sample && {
@@ -380,7 +366,7 @@ export async function exportProject(options) {
             W, H, sourceTime(i), tOut, outDuration, doc, { forceBgMode, peaks }
           );
           sample?.close();
-          await videoSource.add(tOut, 1 / fps);
+          await videoSource.add(tOut, 1 / targetFps);
           i++;
           if (i % 3 === 0 || i === totalFrames) {
             const elapsedSec = (performance.now() - startMs) / 1000;
@@ -392,7 +378,7 @@ export async function exportProject(options) {
               frame: i,
               totalFrames,
               fps: curFps,
-              speedX: curFps / fps,
+              speedX: curFps / targetFps,
               elapsedSec,
               etaSec: (totalFrames - i) / Math.max(0.01, curFps),
               diskStreamed,
@@ -401,13 +387,12 @@ export async function exportProject(options) {
           }
         }
       } else {
-        // Audio-only OR Transparent/Chroma Overlay render (no source video decoding overhead = ultra fast!)
         for (let i = 0; i < totalFrames; i++) {
           if (signal?.aborted) throw cancelled();
-          const tOut = i / fps;
+          const tOut = i / targetFps;
           const tSrc = toSourceTime(cuts, tOut);
           renderScene(ctx, null, W, H, tSrc, tOut, outDuration, doc, { forceBgMode, peaks });
-          await videoSource.add(tOut, 1 / fps);
+          await videoSource.add(tOut, 1 / targetFps);
           if ((i + 1) % 4 === 0 || i === totalFrames - 1) {
             const elapsedSec = (performance.now() - startMs) / 1000;
             const ratio = (i + 1) / totalFrames;
@@ -418,7 +403,7 @@ export async function exportProject(options) {
               frame: i + 1,
               totalFrames,
               fps: curFps,
-              speedX: curFps / fps,
+              speedX: curFps / targetFps,
               elapsedSec,
               etaSec: (totalFrames - (i + 1)) / Math.max(0.01, curFps),
               diskStreamed,
@@ -438,9 +423,7 @@ export async function exportProject(options) {
     ]);
 
     await output.finalize();
-    if (writableStream) {
-      await writableStream.close().catch(() => {});
-    }
+    if (writableStream) await writableStream.close().catch(() => {});
 
     const elapsedSec = (performance.now() - startMs) / 1000;
     let blob = null;

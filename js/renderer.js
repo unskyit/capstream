@@ -1,5 +1,5 @@
 /**
- * CapStream — Unified Canvas 2D Renderer (Live Preview + Transparent/Video Export)
+ * CapStream — Unified Canvas 2D Renderer (Live Preview + Export + Safe-Zone Overlays)
  * Powered by Unskyit
  */
 import { fontEpoch, fontString } from "./fonts.js";
@@ -21,7 +21,7 @@ const bounceOut = (p) => {
 export const DEFAULT_FX = {
   emoji: { enabled: false, size: 1.4 },
   hook: { enabled: false, text: "", duration: 3, color: "#FFFFFF", background: "#2563EB" },
-  progress: { enabled: false, color: "#3B82F6", position: "bottom" },
+  progress: { enabled: false, color: "#2563EB", position: "bottom" },
   zoom: { enabled: false, intensity: 0.5, smooth: true },
   cuts: { enabled: false, pace: "fast" },
 };
@@ -31,8 +31,9 @@ export const DEFAULT_FRAME = {
   fit: "cover", // cover | blur | contain
   panX: 0,
   panY: 0,
+  scale: 1,
   bgMode: "video", // video | transparent | chroma-green | chroma-blue | solid | gradient | waveform
-  bgColor: "#0A0F1E",
+  bgColor: "#0B162C",
   bgColor2: "#1E3A8A",
   waveformColor: "#3B82F6",
 };
@@ -51,12 +52,21 @@ export function aspectRatio(meta, aspect) {
   return RATIOS[aspect] || 9 / 16;
 }
 
-export function frameSize(meta, aspect, shortSide = 1080) {
-  const ratio = aspectRatio(meta, aspect);
+/**
+ * Computes even output dimensions.
+ * If shortSide === 0 ("original"), preserves the exact native source resolution!
+ */
+export function frameSize(meta, aspect, shortSide = 0) {
   const even = (n) => Math.max(2, Math.round(n / 2) * 2);
+  if ((!shortSide || shortSide === 0) && aspect === "source" && meta && !meta.isAudioOnly && meta.width && meta.height) {
+    return { width: even(meta.width), height: even(meta.height) };
+  }
+  const nativeShort = meta && !meta.isAudioOnly && meta.width && meta.height ? Math.min(meta.width, meta.height) : 1080;
+  const targetShort = shortSide > 0 ? shortSide : nativeShort;
+  const ratio = aspectRatio(meta, aspect);
   return ratio <= 1
-    ? { width: even(shortSide), height: even(shortSide / ratio) }
-    : { width: even(shortSide * ratio), height: even(shortSide) };
+    ? { width: even(targetShort), height: even(targetShort / ratio) }
+    : { width: even(targetShort * ratio), height: even(targetShort) };
 }
 
 /* ------------------------------------------------------------------ Timing */
@@ -100,11 +110,7 @@ const layouts = new WeakMap();
 function setFont(ctx, style, px) {
   ctx.font = fontString(style.font, style.weight, style.italic, px);
   if ("letterSpacing" in ctx) {
-    try {
-      ctx.letterSpacing = `${(style.tracking * px).toFixed(2)}px`;
-    } catch {
-      // Ignore unsupported letterSpacing
-    }
+    try { ctx.letterSpacing = `${(style.tracking * px).toFixed(2)}px`; } catch {}
   }
 }
 
@@ -455,10 +461,9 @@ export function drawProgress(ctx, W, H, ratio, bar) {
   ctx.restore();
 }
 
-/* ------------------------------------------------------------------ Audio Waveform Backdrop */
 function drawWaveformBackdrop(ctx, W, H, tSource, peaks, frame) {
   const g = ctx.createLinearGradient(0, 0, 0, H);
-  g.addColorStop(0, frame.bgColor || "#0A0F1E");
+  g.addColorStop(0, frame.bgColor || "#0B162C");
   g.addColorStop(1, frame.bgColor2 || "#1E3A8A");
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, W, H);
@@ -485,34 +490,56 @@ function drawWaveformBackdrop(ctx, W, H, tSource, peaks, frame) {
   ctx.restore();
 }
 
-/* ------------------------------------------------------------------ Video Drawing */
+/* ------------------------------------------------------------------ Video Drawing (FIXED PAN X & PAN Y!) */
 let scratch = null;
 
 function drawCover(ctx, src, W, H, panX, panY, zoom) {
   const base = Math.max(W / src.width, H / src.height);
   const bw = W / base;
   const bh = H / base;
-  const bx = (src.width - bw) * (0.5 + clamp(panX, -1, 1) / 2);
-  const by = (src.height - bh) * (0.5 + clamp(panY, -1, 1) / 2);
   const sw = bw / zoom;
   const sh = bh / zoom;
-  src.draw(ctx, bx + (bw - sw) * 0.5, by + (bh - sh) * 0.42, sw, sh, 0, 0, W, H);
+
+  // Compute source crop pan when zoomed or aspect differs, PLUS canvas offset when aspect matches
+  const slackX = src.width - sw;
+  const slackY = src.height - sh;
+  const px = clamp(panX || 0, -1, 1);
+  const py = clamp(panY || 0, -1, 1);
+
+  if (slackX > 2 || slackY > 2) {
+    const sx = slackX * (0.5 + px * 0.5);
+    const sy = slackY * (0.5 + py * 0.5);
+    const dx = slackX <= 2 ? px * W * 0.25 : 0;
+    const dy = slackY <= 2 ? py * H * 0.25 : 0;
+    src.draw(ctx, sx, sy, sw, sh, dx, dy, W, H);
+  } else {
+    // Source aspect matches canvas aspect & zoom === 1 -> apply direct pan translation!
+    const dx = px * W * 0.25;
+    const dy = py * H * 0.25;
+    src.draw(ctx, 0, 0, src.width, src.height, dx, dy, W, H);
+  }
 }
 
-export function drawVideo(ctx, src, W, H, frame, zoom) {
+export function drawVideo(ctx, src, W, H, frame, autoZoom) {
   if (!src?.width || !src?.height) return;
+  const zoom = Math.max(0.5, (frame.scale || 1) * (autoZoom || 1));
   const sameShape = Math.abs(src.width / src.height - W / H) < 0.01;
+
   if (frame.fit === "contain") {
     const scale = Math.min(W / src.width, H / src.height) * zoom;
     const dw = src.width * scale;
     const dh = src.height * scale;
-    src.draw(ctx, 0, 0, src.width, src.height, (W - dw) / 2, (H - dh) / 2, dw, dh);
+    const dx = (W - dw) / 2 + (frame.panX || 0) * W * 0.25;
+    const dy = (H - dh) / 2 + (frame.panY || 0) * H * 0.25;
+    src.draw(ctx, 0, 0, src.width, src.height, dx, dy, dw, dh);
     return;
   }
+
   if (frame.fit !== "blur" || sameShape) {
     drawCover(ctx, src, W, H, frame.panX, frame.panY, zoom);
     return;
   }
+
   const bw = 48;
   const bh = Math.max(8, Math.round((bw * H) / W));
   if (!scratch) scratch = typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(bw, bh) : document.createElement("canvas");
@@ -530,16 +557,94 @@ export function drawVideo(ctx, src, W, H, frame, zoom) {
   ctx.fillStyle = "rgba(0,0,0,0.4)";
   ctx.fillRect(0, 0, W, H);
   ctx.restore();
+
   const scale = Math.min(W / src.width, H / src.height) * zoom;
   const dw = src.width * scale;
   const dh = src.height * scale;
-  src.draw(ctx, 0, 0, src.width, src.height, (W - dw) / 2, (H - dh) / 2, dw, dh);
+  const dx = (W - dw) / 2 + (frame.panX || 0) * W * 0.25;
+  const dy = (H - dh) / 2 + (frame.panY || 0) * H * 0.25;
+  src.draw(ctx, 0, 0, src.width, src.height, dx, dy, dw, dh);
 }
 
-/**
- * Renders one complete frame.
- * Supports true transparent alpha (`bgMode === "transparent"` or `forceTransparent === true`).
- */
+/* ------------------------------------------------------------------ Social Safe-Zone Preview Overlay (NEVER exported!) */
+export function drawSafeZoneOverlay(ctx, W, H, mode) {
+  if (!mode || mode === "off") return;
+  const isShorts = mode === "shorts";
+  const u = Math.min(W, H);
+
+  ctx.save();
+  // Bottom readability gradient
+  const grad = ctx.createLinearGradient(0, H * 0.68, 0, H);
+  grad.addColorStop(0, "rgba(0,0,0,0)");
+  grad.addColorStop(1, "rgba(0,0,0,0.68)");
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, H * 0.68, W, H * 0.32);
+
+  // Subtle safe-zone boundary dashed guide
+  ctx.strokeStyle = "rgba(56, 189, 248, 0.45)";
+  ctx.lineWidth = Math.max(1, u * 0.003);
+  ctx.setLineDash([u * 0.015, u * 0.012]);
+  ctx.strokeRect(W * 0.05, H * 0.12, W * 0.77, H * 0.66);
+  ctx.setLineDash([]);
+
+  // Right action column (Like, Comment, Share, Remix)
+  const rx = W * 0.9;
+  const btnR = u * 0.044;
+  const items = isShorts
+    ? [["♥", "124K"], ["💬", "1.4K"], ["↗", "Share"], ["↻", "Remix"]]
+    : [["♥", "48.2K"], ["💬", "892"], ["➤", "12K"], ["•••", ""]];
+  const startY = H * 0.54;
+  const stepY = H * 0.095;
+
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  items.forEach(([icon, label], i) => {
+    const y = startY + i * stepY;
+    ctx.fillStyle = "rgba(15, 23, 42, 0.48)";
+    ctx.beginPath();
+    ctx.arc(rx, y, btnR, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "#FFFFFF";
+    ctx.font = `700 ${(btnR * 0.95).toFixed(1)}px system-ui, sans-serif`;
+    ctx.fillText(icon, rx, y);
+
+    if (label) {
+      ctx.font = `600 ${(u * 0.028).toFixed(1)}px system-ui, sans-serif`;
+      ctx.fillText(label, rx, y + btnR + u * 0.025);
+    }
+  });
+
+  // Bottom-left creator handle + Lorem Ipsum caption preview
+  const lx = W * 0.055;
+  const baseY = H * 0.85;
+  ctx.textAlign = "left";
+  ctx.fillStyle = "#2563EB";
+  ctx.beginPath();
+  ctx.arc(lx + u * 0.035, baseY - u * 0.05, u * 0.035, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#FFFFFF";
+  ctx.font = `800 ${(u * 0.032).toFixed(1)}px system-ui, sans-serif`;
+  ctx.fillText("U", lx + u * 0.023, baseY - u * 0.048);
+
+  ctx.font = `700 ${(u * 0.036).toFixed(1)}px system-ui, sans-serif`;
+  ctx.fillText(isShorts ? "@unskyit  •  Subscribe" : "unskyit  •  Follow", lx + u * 0.088, baseY - u * 0.048);
+
+  ctx.fillStyle = "rgba(255,255,255,0.9)";
+  ctx.font = `500 ${(u * 0.031).toFixed(1)}px system-ui, sans-serif`;
+  ctx.fillText("Lorem ipsum dolor sit amet, consectetur", lx, baseY + u * 0.02);
+  ctx.fillText("adipiscing elit #shorts #reels #capstream", lx, baseY + u * 0.062);
+
+  // Top badge indicating preview-only safe zone
+  ctx.fillStyle = "rgba(11, 22, 44, 0.72)";
+  plate(ctx, W * 0.05, H * 0.025, W * 0.44, u * 0.06, u * 0.03);
+  ctx.fillStyle = "#93C5FD";
+  ctx.font = `700 ${(u * 0.026).toFixed(1)}px system-ui, sans-serif`;
+  ctx.fillText(isShorts ? "YT SHORTS SAFE ZONE (PREVIEW)" : "IG REELS SAFE ZONE (PREVIEW)", W * 0.075, H * 0.025 + u * 0.032);
+
+  ctx.restore();
+}
+
 export function renderScene(ctx, source, W, H, tSource, tOutput, outDuration, doc, opts = {}) {
   const bgMode = opts.forceBgMode || doc.frame.bgMode || "video";
 
@@ -552,11 +657,11 @@ export function renderScene(ctx, source, W, H, tSource, tOutput, outDuration, do
     ctx.fillStyle = "#0000FF";
     ctx.fillRect(0, 0, W, H);
   } else if (bgMode === "solid") {
-    ctx.fillStyle = doc.frame.bgColor || "#0A0F1E";
+    ctx.fillStyle = doc.frame.bgColor || "#0B162C";
     ctx.fillRect(0, 0, W, H);
   } else if (bgMode === "gradient") {
     const g = ctx.createLinearGradient(0, 0, 0, H);
-    g.addColorStop(0, doc.frame.bgColor || "#0A0F1E");
+    g.addColorStop(0, doc.frame.bgColor || "#0B162C");
     g.addColorStop(1, doc.frame.bgColor2 || "#1E3A8A");
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, W, H);
@@ -582,4 +687,8 @@ export function renderScene(ctx, source, W, H, tSource, tOutput, outDuration, do
     doc.fx.emoji.enabled ? emojiPicker(doc.pages) : undefined,
     doc.fx.emoji.size,
   );
+
+  if (opts.safeZone && opts.safeZone !== "off") {
+    drawSafeZoneOverlay(ctx, W, H, opts.safeZone);
+  }
 }

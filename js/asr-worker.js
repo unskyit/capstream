@@ -1,13 +1,14 @@
 /**
  * CapStream — Whisper Speech Recognition Web Worker (Powered by Unskyit)
- * Runs 100% locally in WebAssembly via Transformers.js.
- * Streams exact MB, % and speed telemetry during first-time model caching.
+ * Automatically checks local ./vendor/ and ./models/ FIRST (100% zero-CDN when bundled),
+ * falling back seamlessly to pinned CDN + permanent Cache Storage.
  */
-const RUNTIME_URL = "https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.2";
+const LOCAL_RUNTIME_URL = "../vendor/transformers.mjs";
+const CDN_RUNTIME_URL = "https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.2";
 let runtimePromise;
 
 function getRuntime() {
-  return (runtimePromise ??= import(RUNTIME_URL));
+  return (runtimePromise ??= import(LOCAL_RUNTIME_URL).catch(() => import(CDN_RUNTIME_URL)));
 }
 
 const RATE = 16000;
@@ -17,14 +18,34 @@ const SEARCH_FROM = 18 * RATE;
 let recognizer = null;
 let loadedModel = "";
 
+async function hasLocalModel(modelId) {
+  try {
+    const shortName = modelId.split("/").pop();
+    const res = await fetch(`../models/${shortName}/config.json`, { method: "HEAD" });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 async function loadModel(modelId) {
   if (recognizer && loadedModel === modelId) {
     self.postMessage({ type: "download", ratio: 1, loadedBytes: 0, totalBytes: 0, speedBps: 0, cached: true });
     return recognizer;
   }
   const { env, pipeline } = await getRuntime();
-  env.allowLocalModels = false;
   env.useBrowserCache = true;
+
+  const isLocal = await hasLocalModel(modelId);
+  const shortName = modelId.split("/").pop();
+  if (isLocal) {
+    env.allowLocalModels = true;
+    env.allowRemoteModels = false;
+    env.localModelPath = new URL("../models/", self.location.href).href;
+  } else {
+    env.allowLocalModels = false;
+    env.allowRemoteModels = true;
+  }
 
   const wasm = env?.backends?.onnx?.wasm;
   if (wasm) {
@@ -36,7 +57,7 @@ async function loadModel(modelId) {
   const files = new Map();
   const startedAt = performance.now();
 
-  recognizer = await pipeline("automatic-speech-recognition", modelId, {
+  recognizer = await pipeline("automatic-speech-recognition", isLocal ? shortName : modelId, {
     dtype: "q8",
     device: "wasm",
     progress_callback: (p) => {
@@ -56,13 +77,13 @@ async function loadModel(modelId) {
           totalBytes: total,
           speedBps: done / elapsed,
           file: p.file,
-          cached: false,
+          cached: isLocal,
         });
       }
     },
   });
   loadedModel = modelId;
-  self.postMessage({ type: "model-ready", model: modelId });
+  self.postMessage({ type: "model-ready", model: modelId, local: isLocal });
   return recognizer;
 }
 
@@ -129,7 +150,7 @@ const NON_SPEECH = /^[\[(♪*].*[\])♪*]$|^♪+$/;
 async function transcribe(request) {
   const recognize = await loadModel(request.model);
   const windows = planWindows(request.audio);
-  self.postMessage({ type: "progress", ratio: 0, chunk: 0, totalChunks: windows.length });
+  self.postMessage({ type: "progress", ratio: 0.02, chunk: 0, totalChunks: windows.length });
 
   let language = request.language;
   if (language === "auto") {
@@ -142,6 +163,12 @@ async function transcribe(request) {
   for (let idx = 0; idx < windows.length; idx++) {
     const [from, to] = windows[idx];
     const chunk = request.audio.subarray(from, to);
+    self.postMessage({
+      type: "progress",
+      ratio: Math.max(0.04, from / Math.max(1, request.audio.length)),
+      chunk: idx + 1,
+      totalChunks: windows.length,
+    });
     if (!isSilent(chunk)) {
       const result = await recognize(chunk, {
         return_timestamps: "word",
