@@ -1,0 +1,9 @@
+# Cloudflare Pages and Netlify. Cross-origin isolation lets the speech model use every CPU core.
+/studio/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: credentialless
+/_next/*
+  Cross-Origin-Embedder-Policy: credentialless
+  Cache-Control: public, max-age=31536000, immutable
+/fonts/*
+  Cache-Control: public, max-age=31536000, immutable

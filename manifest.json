@@ -1,0 +1,20 @@
+{
+  "name": "CapStream — AI Video & Audio Captions by Unskyit",
+  "short_name": "CapStream",
+  "description": "Free, offline-ready PWA caption studio with disk-streamed unlimited length and transparent background export. Powered by Unskyit.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#F8FAFC",
+  "theme_color": "#0F172A",
+  "categories": ["multimedia", "productivity", "utilities"],
+  "icons": [
+    {
+      "src": "./favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
