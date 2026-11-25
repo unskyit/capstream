@@ -1,14 +1,13 @@
 /**
  * CapStream — Whisper Speech Recognition Web Worker (Powered by Unskyit)
- * Automatically checks local ./vendor/ and ./models/ FIRST (100% zero-CDN when bundled),
- * falling back seamlessly to pinned CDN + permanent Cache Storage.
+ * Loads pinned @huggingface/transformers@4.3.2 & official onnx-community Whisper models
+ * with permanent browser caching for reliable offline reuse.
  */
-const LOCAL_RUNTIME_URL = "../vendor/transformers.mjs";
-const CDN_RUNTIME_URL = "https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.2";
+const RUNTIME_URL = "https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.2";
 let runtimePromise;
 
 function getRuntime() {
-  return (runtimePromise ??= import(LOCAL_RUNTIME_URL).catch(() => import(CDN_RUNTIME_URL)));
+  return (runtimePromise ??= import(RUNTIME_URL));
 }
 
 const RATE = 16000;
@@ -18,34 +17,15 @@ const SEARCH_FROM = 18 * RATE;
 let recognizer = null;
 let loadedModel = "";
 
-async function hasLocalModel(modelId) {
-  try {
-    const shortName = modelId.split("/").pop();
-    const res = await fetch(`../models/${shortName}/config.json`, { method: "HEAD" });
-    return res.ok;
-  } catch {
-    return false;
-  }
-}
-
 async function loadModel(modelId) {
   if (recognizer && loadedModel === modelId) {
     self.postMessage({ type: "download", ratio: 1, loadedBytes: 0, totalBytes: 0, speedBps: 0, cached: true });
     return recognizer;
   }
   const { env, pipeline } = await getRuntime();
+  env.allowLocalModels = false;
+  env.allowRemoteModels = true;
   env.useBrowserCache = true;
-
-  const isLocal = await hasLocalModel(modelId);
-  const shortName = modelId.split("/").pop();
-  if (isLocal) {
-    env.allowLocalModels = true;
-    env.allowRemoteModels = false;
-    env.localModelPath = new URL("../models/", self.location.href).href;
-  } else {
-    env.allowLocalModels = false;
-    env.allowRemoteModels = true;
-  }
 
   const wasm = env?.backends?.onnx?.wasm;
   if (wasm) {
@@ -57,7 +37,7 @@ async function loadModel(modelId) {
   const files = new Map();
   const startedAt = performance.now();
 
-  recognizer = await pipeline("automatic-speech-recognition", isLocal ? shortName : modelId, {
+  recognizer = await pipeline("automatic-speech-recognition", modelId, {
     dtype: "q8",
     device: "wasm",
     progress_callback: (p) => {
@@ -77,13 +57,13 @@ async function loadModel(modelId) {
           totalBytes: total,
           speedBps: done / elapsed,
           file: p.file,
-          cached: isLocal,
+          cached: false,
         });
       }
     },
   });
   loadedModel = modelId;
-  self.postMessage({ type: "model-ready", model: modelId, local: isLocal });
+  self.postMessage({ type: "model-ready", model: modelId });
   return recognizer;
 }
 

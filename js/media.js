@@ -6,12 +6,11 @@
 export const SPEECH_RATE = 16000;
 export const PEAK_RATE = 50;
 
-const LOCAL_MB_URL = "../vendor/mediabunny.mjs";
 const CDN_MB_URL = "https://cdn.jsdelivr.net/npm/mediabunny@1.66.0/+esm";
 let mbPromise = null;
 
 export function getMediabunny() {
-  return (mbPromise ??= import(LOCAL_MB_URL).catch(() => import(CDN_MB_URL)));
+  return (mbPromise ??= import(CDN_MB_URL));
 }
 
 function isAudioMimeOrExt(file) {

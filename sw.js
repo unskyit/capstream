@@ -1,12 +1,11 @@
 /**
- * CapStream — Offline-First PWA Service Worker (Powered by Unskyit)
- * Caches the app shell, local fonts, pinned runtime libraries, and downloaded
- * Whisper ONNX models so CapStream runs reliably offline like a native app.
+ * CapStream — Offline-First PWA Service Worker v3 (Powered by Unskyit)
+ * Caches app shell, local fonts, pinned CDN runtimes, and Whisper ONNX models.
  */
 
-const SHELL_CACHE = "capstream-shell-v2";
-const RUNTIME_CACHE = "capstream-runtime-v2";
-const MODEL_CACHE = "capstream-models-v2";
+const SHELL_CACHE = "capstream-shell-v3";
+const RUNTIME_CACHE = "capstream-runtime-v3";
+const MODEL_CACHE = "capstream-models-v3";
 
 const SHELL_ASSETS = [
   "./",
@@ -62,50 +61,45 @@ self.addEventListener("fetch", (event) => {
   if (req.method !== "GET") return;
   const url = new URL(req.url);
 
-  // 1. Whisper ONNX models & WASM binaries -> Cache-First (permanent offline reuse)
+  // 1. Whisper ONNX models & WASM binaries -> Cache-First
   if (isModelUrl(url)) {
     event.respondWith(
       caches.open(MODEL_CACHE).then(async (cache) => {
         const hit = await cache.match(req);
         if (hit) return hit;
         const res = await fetch(req);
-        if (res && res.ok) {
-          cache.put(req, res.clone()).catch(() => {});
-        }
+        if (res && res.ok) cache.put(req, res.clone()).catch(() => {});
         return res;
       })
     );
     return;
   }
 
-  // 2. Pinned CDN libraries (Transformers.js, Mediabunny, AAC encoder) -> Cache-First
+  // 2. Pinned CDN libraries -> Cache-First
   if (isPinnedCdnUrl(url)) {
     event.respondWith(
       caches.open(RUNTIME_CACHE).then(async (cache) => {
         const hit = await cache.match(req);
         if (hit) return hit;
         const res = await fetch(req);
-        if (res && res.ok) {
-          cache.put(req, res.clone()).catch(() => {});
-        }
+        if (res && res.ok) cache.put(req, res.clone()).catch(() => {});
         return res;
       })
     );
     return;
   }
 
-  // 3. Same-origin app shell & local .woff2 fonts -> Stale-While-Revalidate / Cache-First
+  // 3. Same-origin app shell & local .woff2 fonts -> Network-First with Cache Fallback
   if (url.origin === self.location.origin) {
     event.respondWith(
       caches.open(SHELL_CACHE).then(async (cache) => {
-        const hit = await cache.match(req);
-        const networkFetch = fetch(req)
-          .then((res) => {
-            if (res && res.ok) cache.put(req, res.clone()).catch(() => {});
-            return res;
-          })
-          .catch(() => hit);
-        return hit || networkFetch;
+        try {
+          const res = await fetch(req);
+          if (res && res.ok) cache.put(req, res.clone()).catch(() => {});
+          return res;
+        } catch {
+          return (await cache.match(req)) || Response.error();
+        }
       })
     );
   }

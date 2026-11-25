@@ -1,19 +1,24 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
   <defs>
-    <linearGradient id="cs-navy" x1="4" y1="4" x2="60" y2="60" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#0F172A"/>
-      <stop offset="100%" stop-color="#1E3A8A"/>
+    <linearGradient id="bg" x1="12" y1="8" x2="116" y2="120" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#1E40AF"/>
+      <stop offset="52%" stop-color="#1D4ED8"/>
+      <stop offset="100%" stop-color="#0B162C"/>
     </linearGradient>
-    <linearGradient id="cs-blue" x1="22" y1="22" x2="50" y2="46" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#60A5FA"/>
-      <stop offset="100%" stop-color="#2563EB"/>
+    <linearGradient id="glow" x1="20" y1="12" x2="108" y2="116" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#93C5FD" stop-opacity="0.55"/>
+      <stop offset="100%" stop-color="#2563EB" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="52" y1="54" x2="102" y2="74" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#7DD3FC"/>
+      <stop offset="100%" stop-color="#38BDF8"/>
     </linearGradient>
   </defs>
-  <!-- Squircle container -->
-  <rect x="2" y="2" width="60" height="60" rx="16" fill="url(#cs-navy)"/>
-  <rect x="2.75" y="2.75" width="58.5" height="58.5" rx="15.25" stroke="#60A5FA" stroke-opacity="0.28" stroke-width="1.5"/>
-  <!-- Stylized geometric C + streaming caption bars -->
-  <path d="M36 18H25C20.0294 18 16 22.0294 16 27V37C16 41.9706 20.0294 46 25 46H36" stroke="#FFFFFF" stroke-width="5.5" stroke-linecap="round"/>
-  <rect x="28" y="25" width="20" height="5.5" rx="2.75" fill="url(#cs-blue)"/>
-  <rect x="28" y="34" width="13" height="5.5" rx="2.75" fill="#93C5FD"/>
+  <!-- Crisp App Squircle -->
+  <rect x="4" y="4" width="120" height="120" rx="30" fill="url(#bg)"/>
+  <rect x="5.5" y="5.5" width="117" height="117" rx="28.5" stroke="url(#glow)" stroke-width="3"/>
+  <!-- Modern Caption Frame + Streaming Bars -->
+  <path d="M72 36H48C38.0589 36 30 44.0589 30 54V74C30 83.9411 38.0589 92 48 92H72" stroke="#FFFFFF" stroke-width="11" stroke-linecap="round"/>
+  <rect x="54" y="51" width="44" height="11" rx="5.5" fill="url(#accent)"/>
+  <rect x="54" y="69" width="30" height="11" rx="5.5" fill="#DBEAFE"/>
 </svg>

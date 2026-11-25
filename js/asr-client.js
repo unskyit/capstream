@@ -9,21 +9,21 @@ export const MODELS = [
     name: "Fast (Whisper Tiny)",
     sizeMB: 67,
     size: "~67 MB",
-    note: "Fastest download & mobile-friendly. Great for clear voice.",
+    note: "Fastest download & mobile-friendly.",
   },
   {
     id: "onnx-community/whisper-base_timestamped",
     name: "Balanced (Whisper Base)",
     sizeMB: 103,
     size: "~103 MB",
-    note: "Recommended for most creators & podcasts.",
+    note: "Recommended for most creators.",
   },
   {
     id: "onnx-community/whisper-small_timestamped",
     name: "Accurate (Whisper Small)",
     sizeMB: 275,
     size: "~275 MB",
-    note: "Best accuracy for accents, fast speech & background music.",
+    note: "Best accuracy for accents & noise.",
   },
 ];
 
@@ -52,7 +52,7 @@ export function getModelInfo(id) {
   return MODELS.find((m) => m.id === id) || MODELS[1];
 }
 
-/** Check which Whisper models are already cached offline on this device */
+/** Check which Whisper models are already cached offline in browser Cache Storage */
 export async function getCachedModels() {
   const cached = new Set();
   if (typeof caches === "undefined") return cached;
@@ -69,13 +69,10 @@ export async function getCachedModels() {
         }
       }
     }
-  } catch {
-    // Ignore cache inspection errors
-  }
+  } catch {}
   return cached;
 }
 
-/** Clear cached Whisper models to free device storage */
 export async function clearModelCache() {
   if (typeof caches === "undefined") return;
   const names = await caches.keys();
@@ -92,7 +89,6 @@ function getWorker() {
   return (worker ??= new Worker(new URL("./asr-worker.js", import.meta.url), { type: "module" }));
 }
 
-/** Pre-download and cache a Whisper model for 100% offline use */
 export function preloadModel(modelId, onProgress, signal) {
   return new Promise((resolve, reject) => {
     const current = getWorker();
@@ -139,7 +135,6 @@ export function preloadModel(modelId, onProgress, signal) {
   });
 }
 
-/** Transcribes 16 kHz mono Float32Array audio with zero-copy ArrayBuffer transfer. */
 export function transcribeAudio(audio, options) {
   return new Promise((resolve, reject) => {
     const current = getWorker();

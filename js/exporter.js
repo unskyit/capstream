@@ -7,18 +7,13 @@ import { getMediabunny } from "./media.js";
 import { cutsFor, frameSize, renderScene } from "./renderer.js";
 import { cutTotal, downloadBlob, keptRanges, toSourceTime } from "./timeline.js";
 
-const LOCAL_AAC_URL = "../vendor/aac-encoder.mjs";
 const CDN_AAC_URL = "https://cdn.jsdelivr.net/npm/@mediabunny/aac-encoder@1.66.0/+esm";
 const FADE = 0.006;
 
 const cancelled = () => new DOMException("Export cancelled", "AbortError");
 
 async function loadAacEncoder() {
-  try {
-    return await import(LOCAL_AAC_URL);
-  } catch {
-    return await import(CDN_AAC_URL);
-  }
+  return await import(CDN_AAC_URL);
 }
 
 export function supportsDiskStream() {
